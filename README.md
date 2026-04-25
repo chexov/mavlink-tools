@@ -1,20 +1,16 @@
-# mavlink-dump
+# mavlink-tools
 
-Fast CLI tool to dump MAVLink tlog files as human-readable text or JSON Lines.
+Fast CLI tools for working with MAVLink telemetry logs.
 
-## Install
+## Tools
 
-```sh
-cargo install --path .
-```
+### mavlink-dump
 
-## Usage
+Dump MAVLink tlog files as human-readable text or JSON Lines.
 
 ```
 mavlink-dump [OPTIONS] <FILE>
 ```
-
-### Options
 
 | Flag | Description |
 |---|---|
@@ -25,7 +21,17 @@ mavlink-dump [OPTIONS] <FILE>
 
 Filters `-f` and `-m` can be combined (both must match). Multiple `-f` values can be passed as `-f A,B` or `-f A -f B`.
 
-### Examples
+### mavlink-gps
+
+GPS track extraction from tlog files. (planned)
+
+## Install
+
+```sh
+cargo install --path .
+```
+
+## Examples
 
 Dump all messages:
 ```sh
