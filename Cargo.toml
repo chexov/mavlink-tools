@@ -1,7 +1,11 @@
 [package]
-name = "mavlink-dump"
+name = "mavlink-tools"
 version = "0.1.0"
 edition = "2024"
+
+[[bin]]
+name = "mavlink-tools"
+path = "src/main.rs"
 
 [dependencies]
 mavlink = { version = "0.17", features = ["ardupilotmega", "std", "serde"] }

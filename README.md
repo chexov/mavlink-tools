@@ -4,12 +4,12 @@ Fast CLI tools for working with MAVLink telemetry logs.
 
 ## Tools
 
-### mavlink-dump
+### mavlink-tools dump
 
 Dump MAVLink tlog files as human-readable text or JSON Lines.
 
 ```
-mavlink-dump [OPTIONS] <FILE>
+mavlink-tools dump [OPTIONS] <FILE>
 ```
 
 | Flag | Description |
@@ -20,6 +20,45 @@ mavlink-dump [OPTIONS] <FILE>
 | `-s, --summary` | Print only a summary table (message counts and rates) |
 
 Filters `-f` and `-m` can be combined (both must match). Multiple `-f` values can be passed as `-f A,B` or `-f A -f B`.
+
+### mavlink-tools ftp
+
+MAVLink FTP client (compatible with `pymavlink`'s `mavftp`). Downloads files from an autopilot's filesystem over a live MAVLink connection.
+
+```
+mavlink-tools ftp --master <CONN> [OPTIONS] <get|ls> <args...>
+```
+
+| Flag | Description |
+|---|---|
+| `--master <CONN>` | Connection string. Format: `udpin:<addr>:<port>`, `udpout:<addr>:<port>`, `tcpin:<addr>:<port>`, `tcpout:<addr>:<port>`, `serial:<port>:<baud>` |
+| `--target-system <N>` | Autopilot system ID (default `1`) |
+| `--target-component <N>` | Autopilot component ID (default `1`) |
+| `--source-system <N>` | This client's system ID (default `255`, GCS-style) |
+| `--source-component <N>` | This client's component ID (default `0`) |
+| `--timeout-ms <MS>` | Per-request timeout (default `500`) |
+| `--retries <N>` | Retries per request (default `3`) |
+
+`<LOCAL>` may be `-` to write to stdout.
+
+Examples:
+```sh
+# Read ArduPilot's UART status virtual file to stdout
+mavlink-tools ftp --master udpin:0.0.0.0:14550 get @SYS/uarts.txt -
+
+# Pull a flight log to disk
+mavlink-tools ftp --master serial:/dev/cu.usbmodem0:115200 get /APM/LOGS/00001.BIN ./00001.BIN
+
+# List a directory
+mavlink-tools ftp --master udpin:0.0.0.0:14550 ls /APM/LOGS
+```
+
+Notes:
+- `get` uses `BurstReadFile` — server pushes 239-byte chunks; on stall the client re-issues from the current offset.
+- `ls` paginates through `ListDirectory` (offset = entry index). Output: `D` entries print as `name/`, `F` entries print as `name<TAB>size`.
+- A 1 Hz `HEARTBEAT` is emitted from `(source_system, source_component)` so FCs that filter unknown peers route FTP responses back.
+- A `ResetSessions` is sent on connect to clear leftover sessions on the FC after aborted runs.
+- Other ops (`put`, `rm`, `mkdir`, `rmdir`, `rename`, `crc`) are not yet implemented.
 
 ### mavlink-gps
 
@@ -35,7 +74,7 @@ cargo install --path .
 
 Dump all messages:
 ```sh
-mavlink-dump flight.tlog
+mavlink-tools dump flight.tlog
 ```
 
 ```
@@ -45,18 +84,18 @@ mavlink-dump flight.tlog
 
 Filter by exact name:
 ```sh
-mavlink-dump -f HEARTBEAT,ATTITUDE flight.tlog
+mavlink-tools dump -f HEARTBEAT,ATTITUDE flight.tlog
 ```
 
 Filter by substring:
 ```sh
-mavlink-dump -m status flight.tlog
+mavlink-tools dump -m status flight.tlog
 # matches: SYS_STATUS, POWER_STATUS, EKF_STATUS_REPORT, STATUSTEXT
 ```
 
 Summary table:
 ```sh
-mavlink-dump -s flight.tlog
+mavlink-tools dump -s flight.tlog
 ```
 
 ```
@@ -71,7 +110,7 @@ Total: 113015 messages, duration: 1208.8s
 
 JSON Lines output (pipe to `jq`, load in Python, etc.):
 ```sh
-mavlink-dump -j -m HEART flight.tlog | jq '.data'
+mavlink-tools dump -j -m HEART flight.tlog | jq '.data'
 ```
 
 ```json
