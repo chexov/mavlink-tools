@@ -12,3 +12,4 @@ mavlink = { version = "0.17", features = ["ardupilotmega", "std", "serde"] }
 clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
 serde_json = "1"
+mavlink-tlog = "0.1.3"

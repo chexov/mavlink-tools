@@ -4,10 +4,12 @@ use std::io::{self, BufReader, Write as _};
 
 use chrono::{DateTime, Utc};
 use clap::Args;
+use mavlink::MavHeader;
 use mavlink::Message as _;
 use mavlink::ardupilotmega::MavMessage;
 use mavlink::error::MessageReadError;
 use mavlink::peek_reader::PeekReader;
+use mavlink_tlog::TlogReader;
 use serde_json::json;
 
 #[derive(Args)]
@@ -37,32 +39,25 @@ pub fn run(cli: DumpArgs) {
         eprintln!("error: cannot open '{}': {e}", cli.file);
         std::process::exit(1);
     });
-    let mut reader = PeekReader::new(BufReader::new(file));
+    let mut reader = TlogReader::new(BufReader::new(file));
     let mut stdout = io::stdout().lock();
 
     let mut counts: HashMap<&'static str, u64> = HashMap::new();
     let mut errors = 0u64;
     let mut first_ts = 0u64;
     let mut last_ts = 0u64;
-    let mut last_accepted_ts = 0u64;
-    let mut desync = false;
 
     loop {
-        // read 8-byte BE timestamp; EOF = done, IO error = fatal
-        let ts_us = match reader.read_exact(8) {
-            Ok(b) => u64::from_be_bytes(b.try_into().unwrap()),
-            Err(MessageReadError::Io(e))
-                if e.kind() == io::ErrorKind::UnexpectedEof =>
-            {
-                break;
-            }
+        let (ts_us, parsed) = match next_message(&mut reader) {
+            Ok(Some(r)) => r,
+            Ok(None) => break,
             Err(e) => {
-                eprintln!("error: reading timestamp: {e}");
+                eprintln!("error: reading tlog: {e}");
                 std::process::exit(1);
             }
         };
 
-        match mavlink::read_any_msg::<MavMessage, _>(&mut reader) {
+        match parsed {
             Ok((header, msg)) => {
                 let name = msg.message_name();
                 if first_ts == 0 {
@@ -82,16 +77,7 @@ pub fn run(cli: DumpArgs) {
 
                 *counts.entry(name).or_insert(0) += 1;
 
-                let ts_display = if desync
-                    || (last_accepted_ts > 0
-                        && ts_us.abs_diff(last_accepted_ts) > 86_400_000_000)
-                {
-                    desync = false;
-                    "[desync]                   ".to_string()
-                } else {
-                    last_accepted_ts = ts_us;
-                    format_timestamp(ts_us)
-                };
+                let ts_display = format_timestamp(ts_us);
 
                 if !cli.summary {
                     let ok = if cli.json {
@@ -122,7 +108,6 @@ pub fn run(cli: DumpArgs) {
             }
             Err(e) => {
                 errors += 1;
-                desync = true;
                 eprintln!("warning: frame parse error: {e}");
             }
         }
@@ -134,6 +119,26 @@ pub fn run(cli: DumpArgs) {
     if errors > 0 {
         eprintln!("{errors} parse errors");
     }
+    let stats = reader.stats();
+    if stats.skipped_bytes > 0 || stats.truncated_tail > 0 {
+        eprintln!(
+            "{} damaged bytes skipped ({} bad CRC), {} truncated at end",
+            stats.skipped_bytes, stats.bad_crc, stats.truncated_tail
+        );
+    }
+}
+
+type Parsed = (u64, Result<(MavHeader, MavMessage), MessageReadError>);
+
+/// Next CRC-checked record, decoded, with the timestamp that was logged with it.
+fn next_message<R: io::Read>(reader: &mut TlogReader<R>) -> io::Result<Option<Parsed>> {
+    Ok(reader.next_record()?.map(|rec| {
+        let mut frame = PeekReader::new(rec.frame.as_bytes());
+        (
+            rec.timestamp_us,
+            mavlink::read_any_msg::<MavMessage, _>(&mut frame),
+        )
+    }))
 }
 
 fn format_timestamp(us: u64) -> String {
@@ -232,4 +237,43 @@ fn print_summary(
     }
     println!("---");
     println!("Total: {total} messages, duration: {duration_s:.1}s");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mavlink::MavlinkVersion;
+    use mavlink::ardupilotmega::HEARTBEAT_DATA;
+
+    fn record(ts: u64, seq: u8) -> Vec<u8> {
+        let header = MavHeader {
+            system_id: 1,
+            component_id: 1,
+            sequence: seq,
+        };
+        let msg = MavMessage::HEARTBEAT(HEARTBEAT_DATA::default());
+        let mut out = ts.to_be_bytes().to_vec();
+        mavlink::write_versioned_msg(&mut out, MavlinkVersion::V2, header, &msg).unwrap();
+        out
+    }
+
+    #[test]
+    fn damaged_bytes_keep_timestamps_on_their_frames() {
+        let garbage = [0xFD, 0x00, 0x13, 0x37, 0xFE, 0x42, 0x99];
+        let mut log = record(1_700_000_000_000_000, 0);
+        log.extend_from_slice(&garbage);
+        log.extend(record(1_700_000_001_000_000, 1));
+
+        let mut reader = TlogReader::new(&log[..]);
+        let mut got = Vec::new();
+        while let Some((ts, parsed)) = next_message(&mut reader).unwrap() {
+            let (header, _) = parsed.unwrap();
+            got.push((ts, header.sequence));
+        }
+        assert_eq!(
+            got,
+            [(1_700_000_000_000_000, 0), (1_700_000_001_000_000, 1)]
+        );
+        assert_eq!(reader.stats().skipped_bytes, garbage.len() as u64);
+    }
 }
